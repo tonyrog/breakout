@@ -1,0 +1,9 @@
+{application, breakout,
+ [{description, "Break out using epx"},
+  {vsn, git},
+  {modules, ["@@MODULES@@"]},
+%%  {mod, {epxong_app, []}},
+  {env, []},
+  {optional_applications,[xbus]},
+  {applications,[kernel,stdlib,epx,alsa]}
+  ]}.
