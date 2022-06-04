@@ -9,8 +9,12 @@
 -behaviour(epxw).
 
 -export([start/0]).
+-export([status/0]).
+-export([install/0]).
 -export([init/1, draw/3, key_press/2, key_release/2]).
 -export([handle_info/2]).
+
+-export([install_cmds/0]).
 
 -define(WINDOW_WIDTH,  240).
 -define(WINDOW_HEIGHT, 320).
@@ -46,6 +50,11 @@
 -define(BRICK_HEIGHT, (?BORDER+3)).
 -define(BRICK_WIDTH,  (?WINDOW_WIDTH div ?BRICKS_PER_ROW)).
 
+-define(APP, ?MODULE).
+-define(APPSTR, ?MODULE_STRING).
+-define(DOTAPP, [$.|?APPSTR]).
+-define(APPPNG, ?APPSTR++".png").
+-define(APPDSK, ?APPSTR++".desktop").
 
 %% -define(dbg(F, A), io:format((F), (A))).
 -define(dbg(F, A), ok).
@@ -100,33 +109,139 @@
 	 alsa_options :: map()	 
 	}).
 
+status() ->
+    io:format("breakout is running\n").
+
+askpass() ->
+    filename:join(code:priv_dir(epx), "epx_askpass").
+
+%% runtime install, first time only for APPIMAGE
+install() ->
+    APPIMAGE = os:getenv("APPIMAGE",undefined),
+    if APPIMAGE =:= undefined ->
+	    ok;
+       true ->
+	    Home = os:getenv("HOME"),
+	    {ok,Vsn} = application:get_key(?APP, vsn),
+	    VsnNL = Vsn++"\n",
+	    case file:read_file(filename:join([Home,?DOTAPP,"installed"])) of
+		{ok,BinVsn} ->
+		    case binary_to_list(BinVsn) of
+			Vsn -> ok; %% already installed
+			VsnNL -> ok; %% already installed
+			_ -> install_(Home, Vsn)
+		    end;
+		{error,enoent} -> install_(Home,Vsn)
+	    end
+    end.
+
+%% root should during real run be candy.AppDir
+%% config is set to candy.AppDir/candy.config
+install_(Home,Vsn) ->
+    APPIMAGE = os:getenv("APPIMAGE", ""),
+    APPDIR = os:getenv("APPDIR", ""),
+    {User1,Admin1} = install_cmds_(Home,Vsn),
+    Dir = filename:join(Home,?DOTAPP),
+    file:make_dir(Dir),
+    os:cmd(string:join(User1, ";")),
+    log_commands(Dir,["# APPIMAGE", ["echo ",APPIMAGE]]),
+    log_commands(Dir,["# APPDIR", ["echo ",APPDIR]]),
+    log_commands(Dir,["# USER1"|User1]),
+    if Admin1 =:= [] ->
+	    ok;
+       true ->
+	    os:cmd("export SUDO_ASKPASS="++askpass()++"; sudo -A sh -c \""++
+		       string:join(Admin1, ";")++"\""),
+	    log_commands(Dir,["# ADMIN1"|Admin1]),
+	    ok
+    end.
+
+install_cmds() ->
+    Home = os:getenv("HOME"),
+    {ok,Vsn} = application:get_key(?APP, vsn),
+    install_cmds_(Home,Vsn).
+
+install_cmds_(Home,Vsn) ->
+    APPDIR = case os:getenv("APPDIR") of
+		 false -> "";
+		 AppD -> AppD
+	     end,
+    APPIMG = case os:getenv("APPIMAGE") of
+		 false -> "";
+		 AppI -> AppI
+	     end,
+    AppDir = case init:get_argument(root) of
+		 {ok,[[APPDIR]]} ->
+		     APPDIR;
+		 _ -> 
+		     code:priv_dir(?APP)
+	     end,
+    {[lists:flatten(Cmd)||Cmd <- install_cmd_(Home, Vsn, AppDir,APPIMG)],
+     ["updatedb"]}.
+
+install_cmd_(Home, Vsn, AppDir,AppImg) ->
+    IconsDir = filename:join([AppDir,"desktop_icons","hicolor"]),
+    case file:list_dir(IconsDir) of
+	{ok,Sizes} ->
+	    lists:append(
+	      [
+	       [
+		["mkdir -p ", filename:join([Home,".local","share","icons","hicolor",Size,"apps"])],
+		["cp ", 
+		 filename:join([AppDir,"desktop_icons","hicolor",Size,
+				"apps",?APPPNG])," ",
+		 filename:join([Home,".local","share","icons","hicolor",Size,
+				"apps",?APPPNG])]] || Size <- Sizes]);
+	_ ->
+	    [["echo icondir=",IconsDir]]
+    end ++
+    [
+     ["cat ", filename:join(AppDir, ?APPDSK), 
+      " | sed 's%APPIMAGE%",AppImg,"%' > ",
+      filename:join([Home, "Desktop", string:titlecase(?APPDSK)])],
+     ["mkdir -p ", filename:join(Home,?DOTAPP)],
+     ["echo \"", Vsn, "\" > ", filename:join([Home,?DOTAPP,"installed"])]
+    ].
+
+%% log each command, one by one
+log_commands(Dir, [Cmd|Cmds]) ->
+    {ok,Fd} = file:open(filename:join(Dir,"install_log.txt"), [write,append]),
+    io:put_chars(Fd, [Cmd,"\n"]),
+    file:close(Fd),
+    log_commands(Dir, Cmds);
+log_commands(_Dir, []) ->
+    ok.
+
+
 start() ->
-    epxw:start(?MODULE, [], [{screen_color, ?GAME_BACKGROUND_COLOR},
-			     {top_bar, 0},
-			     {left_bar, 0},
-			     {right_bar, 0},
-			     {bottom_bar, 0},
-			     {width,?WINDOW_WIDTH},{height,?WINDOW_HEIGHT}
-			    ]).
+    application:load(?APP),
+    install(),
+    application:ensure_all_started(?APP),
+    start_it([], start).
+
+start_it(Options, Start) ->
+    epxw:Start(?MODULE,
+	       Options,
+	       [{title, "Breakout"},
+		{screen_color, ?GAME_BACKGROUND_COLOR},
+		{top_bar, 0},
+		{left_bar, 0},
+		{right_bar, 0},
+		{bottom_bar, 0},
+		{width,?WINDOW_WIDTH},{height,?WINDOW_HEIGHT}
+	       ]).
 
 init(_Args) ->
-    epxw:set_status_text("Breakout"),
-
     CX = ?WINDOW_WIDTH div 2,
     CY = ?WINDOW_HEIGHT div 2,
-
     Window = epxw:window(),
     epx:window_enable_events(Window, no_auto_repeat),
-    epx:window_adjust(Window, [{name,"Breakout"},
-			       {min_width,?WINDOW_WIDTH},
+    epx:window_adjust(Window, [{min_width,?WINDOW_WIDTH},
 			       {max_width,?WINDOW_WIDTH},
 			       {min_height,?WINDOW_HEIGHT},
 			       {max_height,?WINDOW_HEIGHT}]),
-
     erlang:start_timer(?TICK, self(), tick),
-
     catch xbus:sub("egear.slider.*"),
-
     Px = ?GAME_LEFT + (?GAME_WIDTH-?PADEL_WIDTH) div 2,
     Py = (?GAME_BOTTOM - 4*?BORDER),
 
@@ -166,16 +281,16 @@ init(_Args) ->
 	alsa_options = AlsaOptions
        }}.
 
-game_new_ball(Game) ->
-    Px = ?GAME_LEFT + ?PADEL_WALL_DIST, 
-    %% Py = (?GAME_BOTTOM - 4*?BORDER),
-    CX = ?WINDOW_WIDTH div 2,
-    CY = ?WINDOW_HEIGHT div 2,
-    P = Game#game.padel,
-    A = math:fmod(3*math:pi()/2, math:pi()),
-    Ball = ball_start(A, CX, CY, ?BALL_SPEED_0),
-    Game#game { padel = P#padel { box = ?set_rect_x(P#padel.box, Px)},
-		ball = Ball }.
+%% game_new_ball(Game) ->
+%%     Px = ?GAME_LEFT + ?PADEL_WALL_DIST, 
+%%     %% Py = (?GAME_BOTTOM - 4*?BORDER),
+%%     CX = ?WINDOW_WIDTH div 2,
+%%     CY = ?WINDOW_HEIGHT div 2,
+%%     P = Game#game.padel,
+%%     A = math:fmod(3*math:pi()/2, math:pi()),
+%%     Ball = ball_start(A, CX, CY, ?BALL_SPEED_0),
+%%     Game#game { padel = P#padel { box = ?set_rect_x(P#padel.box, Px)},
+%% 		ball = Ball }.
 
 key_press({key_press, _Key=?PADEL_KEY_LEFT, _Mod, _Code}, Game) ->
     ?dbg("key_press ~p(1)\n", [[_Key]]),
@@ -442,7 +557,7 @@ draw_score(Screen, 2, Score, _Game) ->
     draw_digits(Screen, X, Y, Text).
 
 read_sound(Name) ->
-    File = filename:join(code:priv_dir(pong), Name ++ ".wav"),
+    File = filename:join(code:priv_dir(breakout), Name ++ ".wav"),
     case file:open(File, [read, binary]) of
 	{ok, Fd} ->
 	    case alsa_wav:read_header(Fd) of

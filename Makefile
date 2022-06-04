@@ -1,4 +1,3 @@
-
 APP = breakout
 APPL = Breakout
 VSN = $(shell git describe --abbrev=0)
