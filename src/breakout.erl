@@ -162,22 +162,16 @@ install_cmds() ->
     install_cmds_(Home,Vsn).
 
 install_cmds_(Home,Vsn) ->
-    APPDIR = case os:getenv("APPDIR") of
-		 false -> "";
-		 AppD -> AppD
-	     end,
-    APPIMG = case os:getenv("APPIMAGE") of
-		 false -> "";
-		 AppI -> AppI
-	     end,
+    APPDIR = os:getenv("APPDIR", ""),
+    APPIMG = os:getenv("APPIMAGE", ""),
     AppDir = case init:get_argument(root) of
 		 {ok,[[APPDIR]]} ->
 		     APPDIR;
-		 _ -> 
+		 _ ->
 		     code:priv_dir(?APP)
 	     end,
     {[lists:flatten(Cmd)||Cmd <- install_cmd_(Home, Vsn, AppDir,APPIMG)],
-     ["updatedb"]}.
+     []}.
 
 install_cmd_(Home, Vsn, AppDir,AppImg) ->
     IconsDir = filename:join([AppDir,"desktop_icons","hicolor"]),
